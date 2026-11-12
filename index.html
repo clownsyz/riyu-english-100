@@ -53,15 +53,16 @@ body{
 .ringbox .txt em{font-style:normal;color:var(--muted);font-size:12px}
 
 .sec-title{font-size:11px;color:var(--muted2);letter-spacing:1.4px;text-transform:uppercase;margin:16px 2px 8px;font-weight:700}
-.daygrid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.daygrid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;padding:2px}
 .daygrid button{
   height:32px;border-radius:9px;border:1px solid var(--line);background:var(--panel);
   color:var(--muted);font-size:11.5px;font-weight:600;cursor:pointer;transition:.16s;font-family:var(--font);
+  padding:0 2px;line-height:1;
 }
 .daygrid button:hover{border-color:var(--line2);color:var(--text)}
 .daygrid button.part{border-color:rgba(56,189,248,.45);color:var(--en);background:var(--en-soft)}
 .daygrid button.done{border-color:rgba(52,211,153,.5);background:rgba(52,211,153,.15);color:var(--ok)}
-.daygrid button.cur{outline:2px solid var(--text);outline-offset:1px}
+.daygrid button.cur{border-color:var(--text);color:var(--text);background:var(--panel2);box-shadow:inset 0 0 0 1.5px var(--text)}
 .legend{display:flex;gap:12px;margin-top:10px;font-size:10.5px;color:var(--muted2);flex-wrap:wrap}
 .legend i{display:inline-block;width:8px;height:8px;border-radius:3px;margin-right:4px}
 .sec-title.daysec{cursor:pointer;display:flex;align-items:center;gap:7px;user-select:none;padding:4px 2px;margin:14px 0 6px;border-radius:7px;transition:.15s}
@@ -71,6 +72,8 @@ body{
 .sec-title.daysec.folded .chev{transform:rotate(-90deg)}
 .daypanel{overflow:hidden;max-height:900px;opacity:1;transition:max-height .26s ease,opacity .2s ease,margin .2s ease}
 .daypanel.folded{max-height:0;opacity:0}
+.ttstip{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:99;background:var(--panel2);border:1px solid var(--line2);color:var(--text);font-size:13px;line-height:1.5;padding:11px 16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.28);max-width:86vw;transition:opacity .5s,transform .5s}
+.ttstip.out{opacity:0;transform:translateX(-50%) translateY(8px)}
 
 /* ---------- main ---------- */
 main{min-width:0;padding:0 30px 80px}
@@ -178,7 +181,8 @@ section.block{margin-bottom:34px}
 @media(max-width:900px){
   #app{grid-template-columns:1fr}
   .side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}
-  .daygrid{grid-template-columns:repeat(10,1fr)}
+  .daygrid{grid-template-columns:repeat(auto-fill,minmax(38px,1fr));gap:5px}
+  .daygrid button{height:34px;font-size:12px}
   main{padding:0 16px 70px}
   .dayhead .num{font-size:34px}
   .search{max-width:none}
@@ -533,26 +537,67 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
   const QT_LABEL = {spell:"拼写", trans:"翻译", listen:"听力", grammar:"语法", mix:"混合"};
   function shuffle(a){ const r=a.slice(); for(let i=r.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));const t=r[i];r[i]=r[j];r[j]=t;} return r; }
   function sample(a,n){ return shuffle(a).slice(0,n); }
-  function speak(text,lang){
-    try{
-      if(!("speechSynthesis" in window) || !text) return;
-      speechSynthesis.cancel();
-      const u=new SpeechSynthesisUtterance(text);
-      u.lang=lang; u.rate=0.85; u.pitch=1;
-      speechSynthesis.speak(u);
-    }catch(e){}
+  /* ---------- speech ---------- */
+  const TTS_OK = ("speechSynthesis" in window) && ("SpeechSynthesisUtterance" in window);
+  let VOICES = [];
+  let speakTok = 0;
+  function loadVoices(){
+    if(!TTS_OK) return;
+    try{ VOICES = speechSynthesis.getVoices() || []; }catch(e){ VOICES = []; }
   }
-  function speakSeq(list){
+  function pickVoice(lang){
+    if(!VOICES.length) loadVoices();
+    if(!VOICES.length) return null;
+    const target = String(lang||"en-US").toLowerCase().replace("_","-");
+    const prefix = target.slice(0,2);
+    let v = VOICES.filter(x=>String(x.lang||"").toLowerCase().replace("_","-")===target)[0];
+    if(!v) v = VOICES.filter(x=>String(x.lang||"").toLowerCase().slice(0,2)===prefix)[0];
+    return v || null;
+  }
+  let tipShown = false;
+  let TTS_HEARD = false;
+  function ttsTip(){
+    if(tipShown) return;
+    tipShown = true;
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
+    const box = document.createElement("div");
+    box.className = "ttstip";
+    box.textContent = isIOS ? "听不到声音？请关闭手机侧边静音开关，并把音量调高。" : "听不到声音？请检查系统音量与浏览器是否允许播放声音。";
+    document.body.appendChild(box);
+    setTimeout(function(){ box.classList.add("out"); }, 4200);
+    setTimeout(function(){ if(box.parentNode) box.parentNode.removeChild(box); }, 5000);
+  }
+  // 顺序朗读多条文本（第一条在用户点击时立即发出，避免 iOS 拦截）
+  function speakList(list){
+    if(!TTS_OK) return;
+    const items = (list||[]).filter(function(x){ return x && x.text; });
+    if(!items.length) return;
+    const tok = ++speakTok;
     try{
-      if(!("speechSynthesis" in window)) return;
-      speechSynthesis.cancel();
-      list.forEach(function(it){
-        if(!it || !it.text) return;
-        const u=new SpeechSynthesisUtterance(it.text);
-        u.lang=it.lang; u.rate=it.rate||0.85; u.pitch=1;
-        speechSynthesis.speak(u);
-      });
+      if(speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
     }catch(e){}
+    let i = 0;
+    function next(){
+      if(tok !== speakTok || i >= items.length) return;
+      const it = items[i++];
+      const u = new SpeechSynthesisUtterance(String(it.text));
+      u.lang = it.lang || "en-US";
+      u.rate = it.rate || 0.85;
+      u.pitch = 1;
+      u.volume = 1;
+      u.onstart = function(){ TTS_HEARD = true; };
+      u.onend = function(){ setTimeout(next, 120); };
+      u.onerror = function(){ setTimeout(next, 120); };
+      try{ speechSynthesis.resume(); }catch(e){}
+      speechSynthesis.speak(u);
+      if(i===1 && !TTS_HEARD){
+        setTimeout(function(){ if(!TTS_HEARD) ttsTip(); }, 1100);
+      }
+    }
+    next();
+  }
+  function speak(text,lang){
+    speakList([{text:text,lang:lang}]);
   }
   function masteredItems(){ return allItems().filter(it=>val(it.day,it.key)===2); }
   function wordExplain(it){
@@ -937,7 +982,7 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
       card.classList.toggle("open");
       if(!wasOpen){
         const sl=card.getAttribute("data-sayl");
-        speakSeq([
+        speakList([
           {text:card.getAttribute("data-say"),lang:sl,rate:0.8},
           {text:card.getAttribute("data-ex"),lang:sl,rate:0.9}
         ]);
@@ -998,6 +1043,10 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
   /* ---------- boot ---------- */
   loadStore();
   try{ if(localStorage.getItem("jp100.theme")==="light") document.body.classList.add("light"); }catch(e){}
+  if(TTS_OK){
+    loadVoices();
+    try{ speechSynthesis.addEventListener("voiceschanged", loadVoices); }catch(e){ speechSynthesis.onvoiceschanged = loadVoices; }
+  }
   S.day = defaultDay();
   render();
 })();
