@@ -64,6 +64,13 @@ body{
 .daygrid button.cur{outline:2px solid var(--text);outline-offset:1px}
 .legend{display:flex;gap:12px;margin-top:10px;font-size:10.5px;color:var(--muted2);flex-wrap:wrap}
 .legend i{display:inline-block;width:8px;height:8px;border-radius:3px;margin-right:4px}
+.sec-title.daysec{cursor:pointer;display:flex;align-items:center;gap:7px;user-select:none;padding:4px 2px;margin:14px 0 6px;border-radius:7px;transition:.15s}
+.sec-title.daysec:hover{color:var(--text);background:var(--panel)}
+.sec-title.daysec .cur{color:var(--en);font-weight:700;letter-spacing:.2px;text-transform:none}
+.sec-title.daysec .chev{font-size:9px;opacity:.85;transition:transform .2s}
+.sec-title.daysec.folded .chev{transform:rotate(-90deg)}
+.daypanel{overflow:hidden;max-height:900px;opacity:1;transition:max-height .26s ease,opacity .2s ease,margin .2s ease}
+.daypanel.folded{max-height:0;opacity:0}
 
 /* ---------- main ---------- */
 main{min-width:0;padding:0 30px 80px}
@@ -230,12 +237,14 @@ section.block{margin-bottom:34px}
         <em id="ringSub">今日 0 / 22</em>
       </div>
     </div>
-    <div class="sec-title">Day 选择</div>
-    <div class="daygrid" id="daygrid"></div>
-    <div class="legend">
-      <span><i style="background:rgba(52,211,153,.7)"></i>已完成</span>
-      <span><i style="background:rgba(56,189,248,.6)"></i>进行中</span>
-      <span><i style="background:var(--line)"></i>未开始</span>
+    <div class="sec-title daysec" id="dayToggle">Day 选择 <span class="cur" id="curDayTag">Day 1</span><span class="chev">▼</span></div>
+    <div class="daypanel" id="dayPanel">
+      <div class="daygrid" id="daygrid"></div>
+      <div class="legend">
+        <span><i style="background:rgba(52,211,153,.7)"></i>已完成</span>
+        <span><i style="background:rgba(56,189,248,.6)"></i>进行中</span>
+        <span><i style="background:var(--line)"></i>未开始</span>
+      </div>
     </div>
   </aside>
   <main>
@@ -426,6 +435,8 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
     const tc=dayProgress(S.day);
     const rs=document.getElementById("ringSub");
     if(rs) rs.textContent="Day "+S.day+" · 已学 "+tc.seen+" · 掌握 "+tc.done;
+    const tag=document.getElementById("curDayTag");
+    if(tag) tag.textContent="Day "+S.day;
   }
   function paintDayGrid(){
     const g=document.getElementById("daygrid"); if(!g) return;
@@ -445,7 +456,7 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
     const v=val(day,key);
     const cls="card "+(lang==="ja"?"ja ":"")+(v>=1?"seen ":"")+(v===2?"mastered":"");
     if(lang==="en"){
-      return '<div class="'+cls+'" data-k="'+key+'" data-say="'+esc(item.w)+'" data-sayl="en-US">'
+      return '<div class="'+cls+'" data-k="'+key+'" data-say="'+esc(item.w)+'" data-sayl="en-US" data-ex="'+esc(item.ex||"")+'">'
         +'<button class="star" data-star="'+key+'" title="标记掌握">'+(v===2?"★":"☆")+'</button>'
         +'<button class="say" data-speak="1" title="播放读音">🔊</button>'
         +'<div class="w">'+esc(item.w)+'</div>'
@@ -453,7 +464,7 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
         +'<div class="rv"><div class="cn">'+esc(item.cn)+'</div>'
         +'<div class="ex"><b>'+esc(item.ex)+'</b><span>'+esc(item.exCn||"")+'</span></div></div></div>';
     }
-    return '<div class="'+cls+'" data-k="'+key+'" data-say="'+esc(item.y||item.k)+'" data-sayl="ja-JP">'
+    return '<div class="'+cls+'" data-k="'+key+'" data-say="'+esc(item.y||item.k)+'" data-sayl="ja-JP" data-ex="'+esc(item.ex||"")+'">'
       +'<button class="star" data-star="'+key+'" title="标记掌握">'+(v===2?"★":"☆")+'</button>'
       +'<button class="say" data-speak="1" title="播放读音">🔊</button>'
       +'<div class="w">'+esc(item.k)+'</div>'
@@ -524,11 +535,23 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
   function sample(a,n){ return shuffle(a).slice(0,n); }
   function speak(text,lang){
     try{
-      if(!("speechSynthesis" in window)) return;
+      if(!("speechSynthesis" in window) || !text) return;
       speechSynthesis.cancel();
       const u=new SpeechSynthesisUtterance(text);
       u.lang=lang; u.rate=0.85; u.pitch=1;
       speechSynthesis.speak(u);
+    }catch(e){}
+  }
+  function speakSeq(list){
+    try{
+      if(!("speechSynthesis" in window)) return;
+      speechSynthesis.cancel();
+      list.forEach(function(it){
+        if(!it || !it.text) return;
+        const u=new SpeechSynthesisUtterance(it.text);
+        u.lang=it.lang; u.rate=it.rate||0.85; u.pitch=1;
+        speechSynthesis.speak(u);
+      });
     }catch(e){}
   }
   function masteredItems(){ return allItems().filter(it=>val(it.day,it.key)===2); }
@@ -827,7 +850,18 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
     S.tab="today";
     Array.prototype.forEach.call(document.getElementById("tabs").children,function(c){ c.classList.toggle("on",c.getAttribute("data-tab")==="today"); });
     document.getElementById("q").value=""; S.q="";
-    render(); window.scrollTo({top:0,behavior:"smooth"});
+    render(); setDayPanel(false); window.scrollTo({top:0,behavior:"smooth"});
+  });
+
+  function setDayPanel(open){
+    const p=document.getElementById("dayPanel"), t=document.getElementById("dayToggle");
+    if(!p||!t) return;
+    p.classList.toggle("folded",!open);
+    t.classList.toggle("folded",!open);
+  }
+  document.getElementById("dayToggle").addEventListener("click",function(){
+    const p=document.getElementById("dayPanel");
+    setDayPanel(p.classList.contains("folded"));
   });
 
   document.getElementById("view").addEventListener("click",function(e){
@@ -902,7 +936,11 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
       const wasOpen=card.classList.contains("open");
       card.classList.toggle("open");
       if(!wasOpen){
-        speak(card.getAttribute("data-say"), card.getAttribute("data-sayl"));
+        const sl=card.getAttribute("data-sayl");
+        speakSeq([
+          {text:card.getAttribute("data-say"),lang:sl,rate:0.8},
+          {text:card.getAttribute("data-ex"),lang:sl,rate:0.9}
+        ]);
         if(val(S.day,k)===0){ setVal(S.day,k,1); card.classList.add("seen"); }
       }
       updateDayMeter();
