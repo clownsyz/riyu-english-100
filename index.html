@@ -494,6 +494,7 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
   }
   // 合并：同一个知识点取「更靠后的状态」，避免用旧云端覆盖本机新进度
   function mergeStore(remote){
+    let changed = false;
     Object.keys(remote||{}).forEach(function(k){
       if(k==="__dates") return;
       const rk = remote[k];
@@ -502,23 +503,61 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
       Object.keys(rk).forEach(function(kk){
         const cur = S.store[k][kk] || 0;
         const nv = rk[kk] || 0;
-        if(nv > cur) S.store[k][kk] = nv;
+        if(nv > cur){ S.store[k][kk] = nv; changed = true; }
       });
     });
     const all = (S.store.__dates||[]).concat(remote.__dates||[]);
     const seen = {};
     all.forEach(function(x){ seen[x] = 1; });
-    S.store.__dates = Object.keys(seen).sort();
+    const merged = Object.keys(seen).sort();
+    if(merged.length !== (S.store.__dates||[]).length) changed = true;
+    S.store.__dates = merged;
+    return changed;
+  }
+  let lastPullAt = 0;
+  function pullThrottled(minMs){
+    if(!SYNC.auto || !SYNC.token || !SYNC.gistId) return;
+    if(document.visibilityState !== "visible") return;
+    const now = Date.now();
+    if(now - lastPullAt < (minMs || 10000)) return;
+    lastPullAt = now;
+    cloudPull(true).then(function(){
+      if(!(S.tab === "review" && S.quiz)){
+        render(); refreshChrome(); paintDayGrid();
+      }
+      const el = document.getElementById("syncState");
+      if(el) el.innerHTML = "已自动同步 · " + fmtTime(SYNC.lastSync);
+      flushPush(); // 把本机较新的进度回写云端，保证两端一致
+    }).catch(function(){});
   }
   function schedulePush(){
     if(!SYNC.auto || !SYNC.token || !SYNC.gistId) return;
     clearTimeout(pushTimer);
-    pushTimer = setTimeout(function(){
-      cloudPush().then(function(){
-        const el = document.getElementById("syncState");
-        if(el) el.innerHTML = "已自动同步 · " + fmtTime(SYNC.lastSync);
+    pushTimer = setTimeout(function(){ flushPush(); }, 800);
+  }
+  function flushPush(){
+    clearTimeout(pushTimer); pushTimer = null;
+    if(!SYNC.auto || !SYNC.token || !SYNC.gistId) return Promise.resolve();
+    return cloudPush().then(function(){
+      const el = document.getElementById("syncState");
+      if(el) el.innerHTML = "已自动同步 · " + fmtTime(SYNC.lastSync);
+    }).catch(function(err){
+      const el = document.getElementById("syncState");
+      if(el) el.innerHTML = '<i>同步失败：'+esc(err.message)+'</i>';
+    });
+  }
+  // 离开/切后台时立刻把待上传内容发出去（keepalive 保证页面卸载也能发完）
+  function pushKeepalive(){
+    if(!SYNC.auto || !SYNC.token || !SYNC.gistId) return;
+    if(!pushTimer) return;
+    clearTimeout(pushTimer); pushTimer = null;
+    try{
+      const content = syncPayload();
+      const body = JSON.stringify({ files: { [GIST_FILE]: { content: content } } });
+      fetch("https://api.github.com/gists/" + SYNC.gistId, {
+        method:"PATCH", headers:ghHeaders(), body:body, keepalive:true
       }).catch(function(){});
-    }, 2500);
+    }catch(e){}
   }
   function fmtTime(iso){
     if(!iso) return "—";
@@ -555,6 +594,7 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
       + '<li>打开 github.com/settings/tokens/new，Note 随便填，Expiration 选 No expiration</li>'
       + '<li>只勾选 <b>gist</b> 这一项，拉到最底点 Generate token</li>'
       + '<li>复制生成的 ghp_ 开头的串，粘贴到上面的输入框</li>'
+      + '<li>开自动同步后：每次点卡片约 1 秒上传；切到后台或关页面会立即上传；回到页面会先拉取最新进度</li>'
       + '<li>Token 只保存在本机浏览器，用来读写你自己的私有 Gist</li>'
       + '</ol></div>';
     return s;
@@ -1252,6 +1292,15 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
       render(); refreshChrome(); paintDayGrid();
     }).catch(function(){});
   }
+  // 及时同步：切到后台/关页面前立刻上传；回到前台时立刻拉取
+  document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState === "hidden"){ pushKeepalive(); }
+    else { pullThrottled(6000); }
+  });
+  window.addEventListener("focus", function(){ pullThrottled(15000); });
+  window.addEventListener("pageshow", function(){ pullThrottled(15000); });
+  window.addEventListener("beforeunload", function(){ pushKeepalive(); });
+  window.addEventListener("pagehide", function(){ pushKeepalive(); });
 })();
 </script>
 </body>
