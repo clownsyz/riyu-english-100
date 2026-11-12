@@ -74,6 +74,18 @@ body{
 .daypanel.folded{max-height:0;opacity:0}
 .ttstip{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:99;background:var(--panel2);border:1px solid var(--line2);color:var(--text);font-size:13px;line-height:1.5;padding:11px 16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.28);max-width:86vw;transition:opacity .5s,transform .5s}
 .ttstip.out{opacity:0;transform:translateX(-50%) translateY(8px)}
+.syncrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.syncrow input{flex:1;min-width:200px;height:38px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:0 12px;font-size:13px;font-family:var(--font);outline:none}
+.syncrow input:focus{border-color:var(--line2)}
+.syncstate{font-size:12.5px;color:var(--muted2);line-height:1.7;margin-top:4px}
+.syncstate b{color:var(--ok);font-weight:700}
+.syncstate i{font-style:normal;color:var(--ja)}
+.syncbtn{height:38px;padding:0 15px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;transition:.15s}
+.syncbtn:hover{border-color:var(--line2)}
+.syncbtn.primary{background:linear-gradient(135deg,var(--en),#6366f1);border:0;color:#fff}
+.syncbtn:disabled{opacity:.5;cursor:default}
+.synchelp{font-size:12px;color:var(--muted2);line-height:1.75;margin:10px 0 0;padding-left:14px}
+.synchelp li{margin-bottom:4px}
 
 /* ---------- main ---------- */
 main{min-width:0;padding:0 30px 80px}
@@ -403,6 +415,149 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
     if(S.store.__dates.indexOf(ds)<0){ S.store.__dates.push(ds); if(S.store.__dates.length>400) S.store.__dates=S.store.__dates.slice(-400); }
     saveStore(); refreshChrome(); paintDayGrid();
     if(S.tab==="stats") renderStats();
+    schedulePush();
+  }
+
+  /* ---------- 云端同步（GitHub Gist） ---------- */
+  const SYNC_KEY = "jp100.sync.v1";
+  const GIST_FILE = "riyu-progress.json";
+  let SYNC = { token:"", gistId:"", auto:true, lastSync:"" };
+  let pushTimer = null, syncing = false;
+
+  function loadSync(){
+    try{ SYNC = Object.assign(SYNC, JSON.parse(localStorage.getItem(SYNC_KEY)||"{}")); }catch(e){}
+  }
+  function saveSync(){
+    try{ localStorage.setItem(SYNC_KEY, JSON.stringify(SYNC)); }catch(e){}
+  }
+  function ghHeaders(){
+    return {
+      "Authorization": "Bearer " + SYNC.token,
+      "Accept": "application/vnd.github+json",
+      "Content-Type": "application/json"
+    };
+  }
+  function syncPayload(){
+    return JSON.stringify({ v:1, updatedAt:new Date().toISOString(), store:S.store });
+  }
+  async function cloudPush(){
+    if(!SYNC.token) throw new Error("请先填写 GitHub Token");
+    if(syncing) return;
+    syncing = true;
+    try{
+      const content = syncPayload();
+      let r;
+      if(SYNC.gistId){
+        r = await fetch("https://api.github.com/gists/" + SYNC.gistId, {
+          method:"PATCH", headers:ghHeaders(),
+          body: JSON.stringify({ files: { [GIST_FILE]: { content: content } } })
+        });
+      }else{
+        r = await fetch("https://api.github.com/gists", {
+          method:"POST", headers:ghHeaders(),
+          body: JSON.stringify({ description:"日语×英语 100 天 学习进度", public:false, files:{ [GIST_FILE]: { content: content } } })
+        });
+      }
+      if(!r.ok){
+        const msg = r.status===401 ? "Token 无效或无 gist 权限" : ("上传失败 HTTP " + r.status);
+        throw new Error(msg);
+      }
+      const j = await r.json();
+      if(!SYNC.gistId) SYNC.gistId = j.id;
+      SYNC.lastSync = new Date().toISOString();
+      saveSync();
+      return j;
+    } finally { syncing = false; }
+  }
+  async function cloudPull(merge){
+    if(!SYNC.token) throw new Error("请先填写 GitHub Token");
+    if(!SYNC.gistId) throw new Error("云端还没有记录，请先点「上传」");
+    const r = await fetch("https://api.github.com/gists/" + SYNC.gistId, { headers: ghHeaders() });
+    if(!r.ok) throw new Error(r.status===401 ? "Token 无效或无 gist 权限" : ("读取失败 HTTP " + r.status));
+    const j = await r.json();
+    const f = j.files && j.files[GIST_FILE];
+    if(!f) throw new Error("云端记录为空");
+    let content = f.content;
+    if(f.truncated && f.raw_url){
+      const rr = await fetch(f.raw_url);
+      content = await rr.text();
+    }
+    const doc = JSON.parse(content);
+    if(!doc || !doc.store) throw new Error("云端数据格式不正确");
+    if(merge){ mergeStore(doc.store); }
+    else{ S.store = doc.store; }
+    if(!S.store.__dates) S.store.__dates = [];
+    saveStore();
+    SYNC.lastSync = new Date().toISOString();
+    saveSync();
+    return doc;
+  }
+  // 合并：同一个知识点取「更靠后的状态」，避免用旧云端覆盖本机新进度
+  function mergeStore(remote){
+    Object.keys(remote||{}).forEach(function(k){
+      if(k==="__dates") return;
+      const rk = remote[k];
+      if(!rk || typeof rk!=="object") return;
+      if(!S.store[k]) S.store[k] = {};
+      Object.keys(rk).forEach(function(kk){
+        const cur = S.store[k][kk] || 0;
+        const nv = rk[kk] || 0;
+        if(nv > cur) S.store[k][kk] = nv;
+      });
+    });
+    const all = (S.store.__dates||[]).concat(remote.__dates||[]);
+    const seen = {};
+    all.forEach(function(x){ seen[x] = 1; });
+    S.store.__dates = Object.keys(seen).sort();
+  }
+  function schedulePush(){
+    if(!SYNC.auto || !SYNC.token || !SYNC.gistId) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(function(){
+      cloudPush().then(function(){
+        const el = document.getElementById("syncState");
+        if(el) el.innerHTML = "已自动同步 · " + fmtTime(SYNC.lastSync);
+      }).catch(function(){});
+    }, 2500);
+  }
+  function fmtTime(iso){
+    if(!iso) return "—";
+    const d = new Date(iso);
+    if(isNaN(d.getTime())) return "—";
+    const p = n => String(n).padStart(2,"0");
+    return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes());
+  }
+  function syncPanelHTML(){
+    const connected = !!(SYNC.token && SYNC.gistId);
+    let s = '<div class="panelbox"><h3>云端同步（跨设备）</h3>';
+    s += '<div class="syncrow">'
+      + '<input id="syncToken" type="password" placeholder="GitHub Token（勾选 gist 权限）" value="'+esc(SYNC.token)+'" autocomplete="off" spellcheck="false">'
+      + '<button class="syncbtn primary" data-act="syncUp">上传</button>'
+      + '<button class="syncbtn" data-act="syncDown">恢复</button>'
+      + '</div>';
+    s += '<div class="syncstate" id="syncState">';
+    if(connected){
+      s += '已连接 · 记录 ID <b>'+esc(SYNC.gistId.slice(0,8))+'</b> · 上次同步 '+fmtTime(SYNC.lastSync);
+      s += ' · 自动同步 '+(SYNC.auto?"开启":"关闭");
+    }else if(SYNC.token){
+      s += '已填写 Token，点「上传」创建云端记录后即可跨设备使用';
+    }else{
+      s += '未开启。填写 Token 后点「上传」，手机和电脑用同一个 Token 即可共享进度';
+    }
+    s += '</div>';
+    if(connected){
+      s += '<div class="syncrow" style="margin-top:10px">'
+        + '<button class="syncbtn" data-act="syncAuto">'+(SYNC.auto?"关闭自动同步":"开启自动同步")+'</button>'
+        + '<button class="syncbtn" data-act="syncOut">断开</button>'
+        + '</div>';
+    }
+    s += '<ol class="synchelp">'
+      + '<li>打开 github.com/settings/tokens/new，Note 随便填，Expiration 选 No expiration</li>'
+      + '<li>只勾选 <b>gist</b> 这一项，拉到最底点 Generate token</li>'
+      + '<li>复制生成的 ghp_ 开头的串，粘贴到上面的输入框</li>'
+      + '<li>Token 只保存在本机浏览器，用来读写你自己的私有 Gist</li>'
+      + '</ol></div>';
+    return s;
   }
   function dayProgress(d){
     let done=0,seen=0;
@@ -843,6 +998,7 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
       html+='<div class="rows">'+weak.slice(0,8).map(x=>'<div class="rowline"><span class="nm">Day '+x.d+'</span><div class="bar"><i style="width:'+(x.p.done/TOTAL_ITEMS*100)+'%;background:var(--gold)"></i></div><span class="vl">'+x.p.done+'/'+TOTAL_ITEMS+'</span></div>').join("")+'</div>';
     }
     html+='</div>';
+    html+=syncPanelHTML();
     v.innerHTML=html;
   }
 
@@ -924,6 +1080,46 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
       if(a==="qnext"){ nextQuestion(); return; }
       if(a==="qagain"){ startQuiz(); return; }
       if(a==="qback"){ S.quiz=null; renderQuizSetup(); return; }
+      if(a==="syncUp"){
+        const inp=document.getElementById("syncToken");
+        if(inp) SYNC.token=inp.value.trim();
+        saveSync();
+        const st=document.getElementById("syncState");
+        if(!SYNC.token){ if(st) st.innerHTML='<i>请先粘贴 Token</i>'; return; }
+        if(st) st.textContent="正在上传…";
+        cloudPush().then(function(){
+          renderStats();
+        }).catch(function(err){
+          const e2=document.getElementById("syncState");
+          if(e2) e2.innerHTML='<i>'+esc(err.message)+'</i>';
+        });
+        return;
+      }
+      if(a==="syncDown"){
+        const inp=document.getElementById("syncToken");
+        if(inp) SYNC.token=inp.value.trim();
+        saveSync();
+        const st=document.getElementById("syncState");
+        if(!SYNC.token){ if(st) st.innerHTML='<i>请先粘贴 Token</i>'; return; }
+        if(!confirm("将用云端记录覆盖本机进度，确定继续？")) return;
+        if(st) st.textContent="正在恢复…";
+        cloudPull().then(function(){
+          renderStats(); refreshChrome(); paintDayGrid();
+          const e2=document.getElementById("syncState");
+          if(e2) e2.innerHTML='<b>已恢复</b> · '+fmtTime(SYNC.lastSync);
+        }).catch(function(err){
+          const e2=document.getElementById("syncState");
+          if(e2) e2.innerHTML='<i>'+esc(err.message)+'</i>';
+        });
+        return;
+      }
+      if(a==="syncAuto"){
+        SYNC.auto=!SYNC.auto; saveSync(); renderStats(); return;
+      }
+      if(a==="syncOut"){
+        if(!confirm("断开后本机不再自动同步（云端记录会保留），确定？")) return;
+        SYNC.gistId=""; SYNC.lastSync=""; saveSync(); renderStats(); return;
+      }
       if(a==="openall"){
         const cards=this.querySelectorAll(".grid .card");
         const openCount=[].filter.call(cards,function(c){return c.classList.contains("open");}).length;
@@ -1042,6 +1238,7 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
 
   /* ---------- boot ---------- */
   loadStore();
+  loadSync();
   try{ if(localStorage.getItem("jp100.theme")==="light") document.body.classList.add("light"); }catch(e){}
   if(TTS_OK){
     loadVoices();
@@ -1049,6 +1246,12 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
   }
   S.day = defaultDay();
   render();
+  // 启动时静默拉取云端最新进度
+  if(SYNC.token && SYNC.gistId && SYNC.auto){
+    cloudPull(true).then(function(){
+      render(); refreshChrome(); paintDayGrid();
+    }).catch(function(){});
+  }
 })();
 </script>
 </body>
