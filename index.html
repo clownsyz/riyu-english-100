@@ -116,6 +116,9 @@ section.block{margin-bottom:34px}
 .card .ex b{display:block;font-weight:500;color:var(--muted)}
 .card .ex span{display:block;color:var(--muted2);font-size:12px;margin-top:2px}
 .card .star{position:absolute;top:9px;right:8px;width:26px;height:26px;border:0;background:transparent;color:var(--muted2);font-size:15px;cursor:pointer;border-radius:7px;line-height:1;transition:.15s}
+.card .say{position:absolute;top:9px;right:34px;width:26px;height:26px;border:0;background:transparent;color:var(--muted2);font-size:13px;cursor:pointer;border-radius:7px;line-height:1;transition:.15s}
+.card .say:hover{background:var(--en-soft);color:var(--en)}
+.card .say.playing{color:var(--en)}
 .card .star:hover{background:rgba(245,196,81,.12);color:var(--gold)}
 .card.mastered .star{color:var(--gold)}
 .card.mastered{border-color:rgba(245,196,81,.35)}
@@ -442,15 +445,17 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
     const v=val(day,key);
     const cls="card "+(lang==="ja"?"ja ":"")+(v>=1?"seen ":"")+(v===2?"mastered":"");
     if(lang==="en"){
-      return '<div class="'+cls+'" data-k="'+key+'">'
+      return '<div class="'+cls+'" data-k="'+key+'" data-say="'+esc(item.w)+'" data-sayl="en-US">'
         +'<button class="star" data-star="'+key+'" title="标记掌握">'+(v===2?"★":"☆")+'</button>'
+        +'<button class="say" data-speak="1" title="播放读音">🔊</button>'
         +'<div class="w">'+esc(item.w)+'</div>'
         +'<div class="meta"><span class="pos">'+esc(item.pos||"")+'</span> '+esc(item.p||"")+'</div>'
         +'<div class="rv"><div class="cn">'+esc(item.cn)+'</div>'
         +'<div class="ex"><b>'+esc(item.ex)+'</b><span>'+esc(item.exCn||"")+'</span></div></div></div>';
     }
-    return '<div class="'+cls+'" data-k="'+key+'">'
+    return '<div class="'+cls+'" data-k="'+key+'" data-say="'+esc(item.y||item.k)+'" data-sayl="ja-JP">'
       +'<button class="star" data-star="'+key+'" title="标记掌握">'+(v===2?"★":"☆")+'</button>'
+      +'<button class="say" data-speak="1" title="播放读音">🔊</button>'
       +'<div class="w">'+esc(item.k)+'</div>'
       +'<div class="meta">'+esc(item.y||"")+'</div>'
       +'<div class="rv"><div class="cn">'+esc(item.cn)+'</div>'
@@ -886,9 +891,20 @@ CURRICULUM.push({"d":100,"en":{"theme":"易混词辨析","words":[{"w":"affect",
     }
     if(card){
       const k=card.getAttribute("data-k");
+      const sayBtn=e.target.closest("[data-speak]");
+      if(sayBtn){
+        e.stopPropagation();
+        speak(card.getAttribute("data-say"), card.getAttribute("data-sayl"));
+        sayBtn.classList.add("playing");
+        setTimeout(function(){ sayBtn.classList.remove("playing"); }, 900);
+        return;
+      }
       const wasOpen=card.classList.contains("open");
       card.classList.toggle("open");
-      if(!wasOpen && val(S.day,k)===0){ setVal(S.day,k,1); card.classList.add("seen"); }
+      if(!wasOpen){
+        speak(card.getAttribute("data-say"), card.getAttribute("data-sayl"));
+        if(val(S.day,k)===0){ setVal(S.day,k,1); card.classList.add("seen"); }
+      }
       updateDayMeter();
       return;
     }
